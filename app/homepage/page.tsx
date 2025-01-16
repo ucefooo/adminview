@@ -3,6 +3,7 @@ import { createClient } from "@/utils/supabase/client";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
+import JSZip from "jszip";
 
 interface ResultItem {
   id: string;
@@ -48,6 +49,103 @@ const HomePage = () => {
     }
   };
 
+  const downloadAllImages = async (bucketName:string) => {
+    try {
+      const { data: fileList, error: listError } = await supabase.storage
+        .from(bucketName)
+        .list();
+
+      if (listError) {
+        console.error("Error fetching file list:", listError);
+        return;
+      }
+
+      if (!fileList || fileList.length === 0) {
+        console.log("No files found in storage");
+        return;
+      }
+
+      const zip = new JSZip();
+
+      const downloadPromises = fileList.map(async (file) => {
+        try {
+          const { data, error: downloadError } = await supabase.storage
+            .from(bucketName)
+            .download(file.name);
+
+          if (downloadError) {
+            console.error(`Error downloading ${file.name}:`, downloadError);
+            return;
+          }
+
+          if (!data) {
+            console.error(`No data received for ${file.name}`);
+            return;
+          }
+          zip.file(file.name + ".jpeg", data);
+          return {
+            success: true,
+            fileName: file.name + ".jpeg",
+          };
+        } catch (err) {
+          console.error(`Error processing ${file.name}:`, err);
+          return {
+            success: false,
+            fileName: file.name,
+            error: err,
+          };
+        }
+      });
+      const results = await Promise.all(downloadPromises);
+      const timestamp = new Date().toISOString().split("T")[0];
+      const successfulDownloads = results
+        .filter((r) => r?.success)
+        .map((r) => r?.fileName);
+      const failedDownloads = results
+        .filter((r) => !r?.success)
+        .map((r) => r?.fileName);
+
+      const summaryContent = `Download Summary (${timestamp})
+  Successfully downloaded files:
+  ${successfulDownloads.join("\n")}
+  
+  Failed downloads:
+  ${failedDownloads.join("\n")}`;
+
+      zip.file("download-summary.txt", summaryContent);
+
+      const content = await zip.generateAsync({
+        type: "blob",
+        compression: "DEFLATE",
+        compressionOptions: {
+          level: 6,
+        },
+      });
+
+      const url = window.URL.createObjectURL(content);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `photos-${timestamp}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+
+      return {
+        success: true,
+        totalFiles: fileList.length,
+        successfulDownloads: successfulDownloads.length,
+        failedDownloads: failedDownloads.length,
+      };
+    } catch (error) {
+      console.error("Error in bulk download:", error);
+      return {
+        success: false,
+        error: error,
+      };
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -73,6 +171,24 @@ const HomePage = () => {
           </h1>
           <div className="text-lg text-gray-600">
             Total Images: {positiveResults.length + negativeResults.length}
+          </div>
+          <div className="flex justify-center gap-6 p-2">
+            <button
+              onClick={() =>
+                downloadAllImages('Photos')
+              }
+              className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-teal-600 hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors"
+            >
+              Download Positive Results
+            </button>
+            <button
+              onClick={() =>
+                downloadAllImages('negative')
+              }
+              className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+            >
+              Download Negative Results
+            </button>
           </div>
         </div>
 
